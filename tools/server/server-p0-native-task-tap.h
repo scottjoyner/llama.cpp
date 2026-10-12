@@ -23,6 +23,9 @@
 namespace llama_server_p0_native_task {
 
 enum class stage : std::uint8_t {
+    // Created at the real completion-route task allocation site. It is
+    // NOT queued, admitted, authenticated to a human or executed yet.
+    task_allocated = 0,
     slot_assigned = 1,
     sampled_token = 2,
     final_result_enqueued = 3,
@@ -32,6 +35,7 @@ struct event {
     stage stage_value;
     int task_id;
     int slot_id;
+    int parent_task_id; // -1: top-level task; child IDs share a request, not an actor.
     std::uint64_t n_generated;
 };
 
@@ -48,14 +52,16 @@ inline void register_test_observer(observer_fn callback) noexcept {
 }
 #endif
 
-inline void emit(stage which, int task_id, int slot_id, std::uint64_t n_generated) noexcept {
+inline void emit(stage which, int task_id, int slot_id, std::uint64_t n_generated,
+                 int parent_task_id = -1) noexcept {
 #ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
-    if (task_id < 0 || slot_id < 0) {
+    if (task_id < 0 || parent_task_id < -1 || parent_task_id == task_id ||
+            (which == stage::task_allocated ? slot_id != -1 : slot_id < 0)) {
         return;
     }
     const auto observer = fixture_observer().load(std::memory_order_acquire);
     if (observer != nullptr) {
-        observer({which, task_id, slot_id, n_generated});
+        observer({which, task_id, slot_id, parent_task_id, n_generated});
     }
 #else
     // A default build cannot install an observer or emit native events.
@@ -63,6 +69,7 @@ inline void emit(stage which, int task_id, int slot_id, std::uint64_t n_generate
     (void) task_id;
     (void) slot_id;
     (void) n_generated;
+    (void) parent_task_id;
 #endif
 }
 
