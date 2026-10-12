@@ -1769,7 +1769,7 @@ private:
         // Experimental test-only native slot admission. No user identity.
         llama_server_p0_native_task::emit(
             llama_server_p0_native_task::stage::slot_assigned,
-            slot.task->id, slot.id, 0);
+            slot.task->id, slot.id, 0, slot.task->id_parent);
         return true;
     }
 
@@ -1820,7 +1820,8 @@ private:
             llama_server_p0_native_task::emit(
                 llama_server_p0_native_task::stage::sampled_token,
                 slot.task->id, slot.id,
-                static_cast<std::uint64_t>(slot.stats.n_gen));
+                static_cast<std::uint64_t>(slot.stats.n_gen),
+                slot.task->id_parent);
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
             }
@@ -4271,6 +4272,21 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 for (int j = 0; j < n_children; j++) {
                     task.add_child(task.id, rd.get_new_id());
                 }
+            }
+
+            // This observes native IDs actually allocated by server_queue
+            // for a particular HTTP completion. It does NOT authenticate the
+            // caller or prove that posting/slot admission succeeded.
+            llama_server_p0_native_task::emit(
+                llama_server_p0_native_task::stage::task_allocated,
+                task.id, -1, 0);
+            // n_cmpl > 1 forks additional independent native task IDs.
+            // Preserve the parent relation; never silently attach multiple
+            // native tasks to a single observed slot/attempt.
+            for (const auto & child : task.child_tasks) {
+                llama_server_p0_native_task::emit(
+                    llama_server_p0_native_task::stage::task_allocated,
+                    child.id, -1, 0, task.id);
             }
 
             tasks.push_back(std::move(task));
