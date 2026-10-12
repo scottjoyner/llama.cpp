@@ -2,6 +2,9 @@
 #include "http.h"
 #include "server-http.h"
 #include "server-common.h"
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+#  include "server-p0-raw-header-shape.h"
+#endif
 #include "ui.h"
 
 #include <cpp-httplib/httplib.h>
@@ -84,6 +87,47 @@ struct gcp_params {
         return val;
     }
 };
+
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+// This is a TEST-ONLY, DENY-ONLY pre-routing attachment. It examines
+// unflattened cpp-httplib request headers BEFORE get_headers() copies them
+// to std::map. It cannot authenticate a user or verify a signature.
+static bool p0_fixture_reject_unimplemented_admission(
+        const httplib::Request & req, httplib::Response & res) {
+    if (req.method != "POST" || req.path != "/v1/chat/completions") {
+        return false;
+    }
+    // Check only the fixed 5-character prefix before allocating any copies.
+    bool has_reserved_header = false;
+    for (const auto & [name, value] : req.headers) {
+        (void) value;
+        if (llama_server_p0_raw_header_shape::is_reserved_p0_header_name(name)) {
+            has_reserved_header = true;
+            break;
+        }
+    }
+    if (!has_reserved_header) return false;
+    if (req.headers.size() > 64) {
+        res.status = 400;
+        res.set_content("invalid P0 test admission header framing", "text/plain");
+        return true;
+    }
+    std::vector<std::pair<std::string, std::string>> raw;
+    raw.reserve(req.headers.size());
+    for (const auto & pair : req.headers) {
+        raw.emplace_back(pair.first, pair.second);
+    }
+    const auto decision =
+        llama_server_p0_raw_header_shape::evaluate_unimplemented_p0_admission(raw);
+    // Even a unique, syntactically valid signed-looking header must DENY.
+    // No cryptographic verification, user identity or model dispatch exists.
+    res.status = decision ==
+        llama_server_p0_raw_header_shape::fixture_admission::rejected_invalid_raw_header_frame
+            ? 400 : 403;
+    res.set_content("P0 native admission verifier not deployed", "text/plain");
+    return true;
+}
+#endif
 
 bool server_http_context::init(const common_params & params) {
     const gcp_params gcp;
@@ -275,6 +319,11 @@ bool server_http_context::init(const common_params & params) {
 
     // register server middlewares
     srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+        if (p0_fixture_reject_unimplemented_admission(req, res)) {
+            return httplib::Server::HandlerResponse::Handled;
+        }
+#endif
         if (params.cors_credentials && params.cors_origins == "*") {
             // special case: echo back the Origin header to allow any origin to access the server with credentials
             res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
