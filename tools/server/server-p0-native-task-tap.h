@@ -29,6 +29,9 @@ enum class stage : std::uint8_t {
     slot_assigned = 1,
     sampled_token = 2,
     final_result_enqueued = 3,
+    // All task IDs for ONE local request have been enumerated. This is
+    // BEFORE posting; it does NOT prove queue admission or execution.
+    allocation_set_closed = 4,
 };
 
 struct event {
@@ -37,10 +40,21 @@ struct event {
     int slot_id;
     int parent_task_id; // -1: top-level task; child IDs share a request, not an actor.
     std::uint64_t n_generated;
+    // Process-local ephemeral grouping key, NOT an authenticated human ID.
+    std::uint64_t request_key;
+    // Meaningful ONLY for allocation_set_closed.
+    std::uint32_t allocated_task_count;
 };
 
 #ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
 using observer_fn = void (*)(const event &) noexcept;
+
+inline std::uint64_t next_test_request_key() noexcept {
+    static std::atomic<std::uint64_t> current {1};
+    const auto key = current.fetch_add(1, std::memory_order_relaxed);
+    // Refuse wraparound; real production epoch/fencing is NOT implemented.
+    return key == 0 ? 0 : key;
+}
 
 inline std::atomic<observer_fn> & fixture_observer() noexcept {
     static std::atomic<observer_fn> callback {nullptr};
@@ -53,23 +67,37 @@ inline void register_test_observer(observer_fn callback) noexcept {
 #endif
 
 inline void emit(stage which, int task_id, int slot_id, std::uint64_t n_generated,
-                 int parent_task_id = -1) noexcept {
+                 int parent_task_id = -1, std::uint64_t request_key = 0,
+                 std::uint32_t allocated_task_count = 0) noexcept {
 #ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
-    if (task_id < 0 || parent_task_id < -1 || parent_task_id == task_id ||
-            (which == stage::task_allocated ? slot_id != -1 : slot_id < 0)) {
+    if (request_key == 0 || parent_task_id < -1 ||
+            (which == stage::allocation_set_closed
+                ? (task_id != -1 || slot_id != -1 || parent_task_id != -1
+                    || n_generated != 0 || allocated_task_count == 0
+                    || allocated_task_count > 64)
+                : (task_id < 0 || parent_task_id == task_id
+                    || allocated_task_count != 0
+                    || (which == stage::task_allocated
+                        ? (slot_id != -1 || n_generated != 0)
+                        : slot_id < 0)))) {
         return;
     }
     const auto observer = fixture_observer().load(std::memory_order_acquire);
     if (observer != nullptr) {
-        observer({which, task_id, slot_id, parent_task_id, n_generated});
+        observer({
+            which, task_id, slot_id, parent_task_id, n_generated,
+            request_key, allocated_task_count,
+        });
     }
 #else
-    // A default build cannot install an observer or emit native events.
+    // Default build cannot register an observer or emit native events.
     (void) which;
     (void) task_id;
     (void) slot_id;
     (void) n_generated;
     (void) parent_task_id;
+    (void) request_key;
+    (void) allocated_task_count;
 #endif
 }
 
