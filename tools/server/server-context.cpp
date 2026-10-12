@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
+#include "server-p0-native-task-tap.h"
 #include "server-queue.h"
 #include "server-schema.h"
 #include "server-stream.h"
@@ -1765,6 +1766,10 @@ private:
         n_empty_consecutive = 0;
 
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
+        // Experimental test-only native slot admission. No user identity.
+        llama_server_p0_native_task::emit(
+            llama_server_p0_native_task::stage::slot_assigned,
+            slot.task->id, slot.id, 0);
         return true;
     }
 
@@ -1811,6 +1816,11 @@ private:
             }
 
             slot.add_token(result);
+            // Sampled in the native model path, not an HTTP/SSE delivery.
+            llama_server_p0_native_task::emit(
+                llama_server_p0_native_task::stage::sampled_token,
+                slot.task->id, slot.id,
+                static_cast<std::uint64_t>(slot.stats.n_gen));
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
             }
@@ -2085,6 +2095,11 @@ private:
         res->generation_params = slot.task->params; // copy the parameters
 
         queue_results.send(std::move(res));
+        // Native result entered the internal queue, not delivered to user.
+        llama_server_p0_native_task::emit(
+            llama_server_p0_native_task::stage::final_result_enqueued,
+            slot.task->id, slot.id,
+            static_cast<std::uint64_t>(slot.stats.n_gen));
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
