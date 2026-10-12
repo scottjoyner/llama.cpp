@@ -1766,10 +1766,13 @@ private:
         n_empty_consecutive = 0;
 
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
-        // Experimental test-only native slot admission. No user identity.
+        // Fixture-only native slot admission; never real user identity.
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
         llama_server_p0_native_task::emit(
             llama_server_p0_native_task::stage::slot_assigned,
-            slot.task->id, slot.id, 0, slot.task->id_parent);
+            slot.task->id, slot.id, 0, slot.task->id_parent,
+            slot.task->p0_fixture_request_key);
+#endif
         return true;
     }
 
@@ -1816,12 +1819,15 @@ private:
             }
 
             slot.add_token(result);
-            // Sampled in the native model path, not an HTTP/SSE delivery.
+            // Native model token sampling, NOT a network first-token receipt.
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
             llama_server_p0_native_task::emit(
                 llama_server_p0_native_task::stage::sampled_token,
                 slot.task->id, slot.id,
                 static_cast<std::uint64_t>(slot.stats.n_gen),
-                slot.task->id_parent);
+                slot.task->id_parent,
+                slot.task->p0_fixture_request_key);
+#endif
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
             }
@@ -2096,12 +2102,15 @@ private:
         res->generation_params = slot.task->params; // copy the parameters
 
         queue_results.send(std::move(res));
-        // Native result entered the internal queue, not delivered to user.
+        // Internal native final result queue only, NOT client delivery.
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
         llama_server_p0_native_task::emit(
             llama_server_p0_native_task::stage::final_result_enqueued,
             slot.task->id, slot.id,
             static_cast<std::uint64_t>(slot.stats.n_gen),
-            slot.task->id_parent);
+            slot.task->id_parent,
+            slot.task->p0_fixture_request_key);
+#endif
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
@@ -4212,6 +4221,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
     try {
         std::vector<server_task> tasks;
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+        // Distinguishes concurrent HTTP tasks without reading headers.
+        // This is an ephemeral PROCESS-LOCAL key, not an authenticated actor.
+        const auto p0_request_key =
+            llama_server_p0_native_task::next_test_request_key();
+        std::uint32_t p0_allocation_count = 0;
+#endif
 
         const auto & prompt = data.at("prompt");
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
@@ -4249,6 +4265,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             server_task task = server_task(type);
 
             task.id = rd.get_new_id();
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+            task.p0_fixture_request_key = p0_request_key;
+#endif
 
             task.tokens = std::move(inputs[i]);
             task.params = server_schema::eval_llama_cmpl_schema(
@@ -4275,24 +4294,31 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
             }
 
-            // This observes native IDs actually allocated by server_queue
-            // for a particular HTTP completion. It does NOT authenticate the
-            // caller or prove that posting/slot admission succeeded.
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+            // Count all native parent/child IDs before post_tasks. A failed
+            // route BEFORE closure leaves incomplete evidence.
             llama_server_p0_native_task::emit(
                 llama_server_p0_native_task::stage::task_allocated,
-                task.id, -1, 0);
-            // n_cmpl > 1 forks additional independent native task IDs.
-            // Preserve the parent relation; never silently attach multiple
-            // native tasks to a single observed slot/attempt.
+                task.id, -1, 0, -1, task.p0_fixture_request_key);
+            p0_allocation_count++;
             for (const auto & child : task.child_tasks) {
                 llama_server_p0_native_task::emit(
                     llama_server_p0_native_task::stage::task_allocated,
-                    child.id, -1, 0, task.id);
+                    child.id, -1, 0, task.id,
+                    child.p0_fixture_request_key);
+                p0_allocation_count++;
             }
-
+#endif
             tasks.push_back(std::move(task));
         }
 
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+        // Closed BEFORE posting to the queue, not an admission guarantee.
+        // No closure on exceptions earlier; >64 tasks refuses callback.
+        llama_server_p0_native_task::emit(
+            llama_server_p0_native_task::stage::allocation_set_closed,
+            -1, -1, 0, -1, p0_request_key, p0_allocation_count);
+#endif
         rd.post_tasks(std::move(tasks));
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
