@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "common.h"
 #include "llama.h"
@@ -136,6 +137,12 @@ struct task_result_state {
 struct server_task {
     int id = -1; // to be filled by server_queue
 
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+    // Fixture-only process-local request grouping, NOT a user identity.
+    // Absent in normal server builds, so no production layout change.
+    std::uint64_t p0_fixture_request_key = 0;
+#endif
+
     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
     size_t index = 0; // used when there are multiple prompts (batch request)
 
@@ -230,6 +237,10 @@ struct server_task {
 
         copy.id        = id_child;
         copy.id_parent = id_parent;
+#ifdef LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP
+        // Explicitly carry origin request across n_cmpl child fanout.
+        copy.p0_fixture_request_key = p0_fixture_request_key;
+#endif
         copy.params    = params;
         copy.type      = type;
         copy.tokens    = tokens.clone();
