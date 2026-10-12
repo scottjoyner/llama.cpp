@@ -1,0 +1,52 @@
+name: P0 native task tap isolated contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/server/server-p0-native-task-tap.h"
+      - "tools/server/server-context.cpp"
+      - "tools/server/tests/unit/p0_native_task_tap_smoke.cpp"
+      - ".github/workflows/p0-native-task-tap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-task-metadata:
+    name: Default-OFF and test-only native task hooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run default-OFF C++17 fixture
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tools/server/tests/unit/p0_native_task_tap_smoke.cpp \
+            -o /tmp/p0-native-tap-default
+          /tmp/p0-native-tap-default
+      - name: Compile and run opt-in test-only C++17 fixture
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DLLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP \
+            tools/server/tests/unit/p0_native_task_tap_smoke.cpp \
+            -o /tmp/p0-native-tap-fixture
+          /tmp/p0-native-tap-fixture
+      - name: Check no deployment wiring and exact three native hook sites
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("tools/server/server-context.cpp").read_text()
+          header = Path("tools/server/server-p0-native-task-tap.h").read_text()
+          assert source.count("llama_server_p0_native_task::emit(") == 3
+          assert "stage::slot_assigned" in source
+          assert "stage::sampled_token" in source
+          assert "stage::final_result_enqueued" in source
+          assert "LLAMA_SERVER_P0_NATIVE_TASK_TEST_TAP" in header
+          assert "register_test_observer" not in source
+          assert "std::string" not in header
+          assert "Authorization" not in header
+          assert "GGUF" not in header
+          print("P0 native hook site and metadata-only guard: PASS")
+          PY
