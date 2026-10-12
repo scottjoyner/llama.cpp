@@ -79,7 +79,7 @@ inline result inspect_original_pairs(
                                       : static_cast<char>(c));
         }
         for (unsigned char c : value) {
-            if (c == '\r' || c == '\n' || c == 0) return denied;
+            if (c < 0x20 || c == 0x7f) return denied;
         }
         if (!protected_name(folded)) continue;
         if (!seen.insert(folded).second) return denied;
