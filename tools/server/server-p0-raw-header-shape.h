@@ -90,4 +90,41 @@ inline result inspect_original_pairs(
     return unique;
 }
 
+// A future P0 signature verifier MUST replace this deny-only fixture
+// after proving operational trusted ingress identity. Until then, no
+// reserved X-P0-* header grants any native-human or trace authority.
+enum class fixture_admission {
+    no_reserved_p0_header,
+    rejected_invalid_raw_header_frame,
+    rejected_unimplemented_signature_verification,
+};
+
+inline bool is_reserved_p0_header_name(const std::string & name) noexcept {
+    if (name.size() < 5) return false;
+    constexpr char prefix[] = "x-p0-";
+    for (size_t i = 0; i < 5; ++i) {
+        unsigned char c = static_cast<unsigned char>(name[i]);
+        if (c >= 'A' && c <= 'Z') c = static_cast<unsigned char>(c + ('a' - 'A'));
+        if (c != static_cast<unsigned char>(prefix[i])) return false;
+    }
+    return true;
+}
+
+inline fixture_admission evaluate_unimplemented_p0_admission(
+        const std::vector<std::pair<std::string, std::string>> & raw) {
+    bool reserved = false;
+    for (const auto & [name, value] : raw) {
+        (void) value;
+        if (is_reserved_p0_header_name(name)) {
+            reserved = true;
+            break;
+        }
+    }
+    if (!reserved) return fixture_admission::no_reserved_p0_header;
+    if (inspect_original_pairs(raw).state == status::rejected) {
+        return fixture_admission::rejected_invalid_raw_header_frame;
+    }
+    return fixture_admission::rejected_unimplemented_signature_verification;
+}
+
 } // namespace llama_server_p0_raw_header_shape
