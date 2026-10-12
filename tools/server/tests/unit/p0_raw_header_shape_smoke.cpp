@@ -76,5 +76,40 @@ int main() {
     };
     if (inspect_original_pairs(unique_other_headers).state !=
             status::unique_but_unauthenticated) return 10;
+    // Real pre-routing integration is compile-time TEST-ONLY and must
+    // refuse even a well-framed X-P0-* claim until a trusted signer exists.
+    if (evaluate_unimplemented_p0_admission(safe) !=
+            fixture_admission::rejected_unimplemented_signature_verification) {
+        return 13;
+    }
+    if (evaluate_unimplemented_p0_admission(duplicate_header) !=
+            fixture_admission::no_reserved_p0_header) {
+        return 14; // ordinary service header duplicate not a P0 signature
+    }
+    if (evaluate_unimplemented_p0_admission(mixed_case) !=
+            fixture_admission::rejected_invalid_raw_header_frame) {
+        return 15;
+    }
+    if (evaluate_unimplemented_p0_admission(unique_other_headers) !=
+            fixture_admission::rejected_unimplemented_signature_verification) {
+        return 16;
+    }
+    if (evaluate_unimplemented_p0_admission({
+            {"Host", "test.internal"}, {"Content-Type", "application/json"},
+        }) != fixture_admission::no_reserved_p0_header) {
+        return 17;
+    }
+    if (evaluate_unimplemented_p0_admission({
+            {"X-P0-Signature", "bad\r\nframing"},
+        }) != fixture_admission::rejected_invalid_raw_header_frame) {
+        return 18;
+    }
+    pairs_t many_reserved;
+    many_reserved.emplace_back("X-P0-Signature", "fake");
+    for (int i = 0; i < 65; i++) many_reserved.emplace_back("X-Normal", "v");
+    if (evaluate_unimplemented_p0_admission(many_reserved) !=
+            fixture_admission::rejected_invalid_raw_header_frame) {
+        return 19;
+    }
     return 0;
 }
