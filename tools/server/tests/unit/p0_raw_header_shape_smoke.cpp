@@ -60,6 +60,8 @@ int main() {
     if (!rejected({{" x-p0-signature", "injected"}})) return 5;
     if (!rejected({{"x-p0-signature", "line1\r\nline2"}})) return 6;
     if (!rejected({{"x-p0-signature", std::string("a\0b", 3)}})) return 7;
+    if (!rejected({{"x-p0-signature", "tab\tvalue"}})) return 11;
+    if (!rejected({{"x-p0-signature", std::string("a\x7f" "b", 3)}})) return 12;
     if (!rejected({{"x-p0-signature", std::string(4097, 'x')}})) return 8;
 
     pairs_t too_many;
