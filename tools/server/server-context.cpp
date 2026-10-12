@@ -2100,7 +2100,8 @@ private:
         llama_server_p0_native_task::emit(
             llama_server_p0_native_task::stage::final_result_enqueued,
             slot.task->id, slot.id,
-            static_cast<std::uint64_t>(slot.stats.n_gen));
+            static_cast<std::uint64_t>(slot.stats.n_gen),
+            slot.task->id_parent);
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
